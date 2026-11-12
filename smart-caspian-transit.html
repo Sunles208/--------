@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smart Caspian Transit</title>
+<style>
+:root{--bg:#edf2f3;--ink:#10303a;--mut:#5b7480;--line:#c9d7db;--sea:#0b6e7f;--deep:#0a2a36;--ok:#2f8f5b;--warn:#d99a00;--bad:#c0392b;color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1b21;--ink:#e3eef1;--mut:#8fa8b2;--line:#264450;--sea:#3fb4c6;--deep:#071419;--ok:#4cc27f;--warn:#f0b429;--bad:#ef6a5b;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
+header{background:var(--deep);color:#fff;padding:22px 5vw;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:end}
+h1{margin:0;font-size:28px;letter-spacing:-.01em}
+header p{margin:2px 0 0;color:#9fc3cc}
+main{max-width:1200px;margin:0 auto;padding:0 5vw 48px}
+section{padding:28px 0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1.35fr 1fr;gap:32px}
+section>h2{grid-column:1/-1;margin:0;font-size:20px}
+@media(max-width:900px){section{grid-template-columns:1fr}}
+label{display:block;margin:0 0 12px;font-size:14px}
+label b{float:right}
+input[type=range]{width:100%;accent-color:var(--sea)}
+button{font:inherit;padding:8px 14px;margin:0 6px 8px 0;border:1px solid var(--sea);background:transparent;color:var(--sea);border-radius:4px;cursor:pointer}
+button.on{background:var(--sea);color:var(--bg)}
+button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-offset:2px}
+.r{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding:4px 0;font-size:14px}
+.n{color:var(--mut);font-size:13px;margin:6px 0}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}
+tr.rec{background:color-mix(in srgb,var(--sea) 15%,transparent)}
+.blk{border-left:3px solid var(--ok);padding:4px 10px;margin:0 0 8px;font-size:13px}
+.blk.bad{border-color:var(--bad)}
+.blk code{color:var(--mut);word-break:break-all}
+pre{background:var(--deep);color:#bfe3ea;padding:12px;border-radius:6px;font-size:12.5px;overflow:auto;margin:0 0 10px}
+</style></head><body>
+<header>
+ <div><h1>Smart Caspian Transit</h1><p>Цифровой двойник каспийского звена МТК «Север — Юг»</p></div>
+ <p>Груз CSC-4821: контейнер 40 футов, 22 т<br>Данные демонстрационные</p>
+</header>
+<main>
+<section>
+ <h2>Условия на Каспии</h2>
+ <div><div id="map"></div><p class="n">Цвет порта показывает риск сорвать стыковку: зелёный низкий, жёлтый повышенный, красный высокий. Пунктир — морской участок. Схема не в масштабе.</p></div>
+ <div id="ctl"></div>
+</section>
+<section>
+ <h2>Прогноз задержки</h2>
+ <div><div id="fc"></div><p class="n">Ожидаемая задержка в часах при отправке в выбранный день, маршрут через Астрахань. Рамка — лучший день.</p></div>
+ <div id="num"></div>
+</section>
+<section>
+ <h2>Цифровой коридор: pre-clearance</h2>
+ <div>
+  <button id="go">Подать предварительную декларацию</button><button id="vf">Проверить цепочку</button><button id="tp">Подделать блок 2</button>
+  <div id="lg"></div><p id="vm" class="n"></p>
+ </div>
+ <div>
+<pre>contract PreClearance {
+  require(docs.complete);
+  require(weight == declared);
+  require(risk.score &lt; 30);
+  emit Cleared(cargo, RU_CUSTOMS);
+  emit Cleared(cargo, IR_CUSTOMS);
+  corridor.status = GREEN;
+}</pre>
+  <p id="pcs"></p>
+  <p class="n">Демо-логика. В рабочей версии: Hyperledger Fabric или защищённые API между таможенными системами.</p>
+ </div>
+</section>
+<section>
+ <h2>Единое окно логиста</h2>
+ <div>
+  <div class="pr"><button data-p="h">Быстрее</button><button data-p="cost">Дешевле</button><button data-p="co2">Зеленее</button></div>
+  <div id="rt" style="overflow-x:auto"></div>
+ </div>
+ <div id="tw"></div>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const col=p=>p<.35?'var(--ok)':p<.65?'var(--warn)':'var(--bad)';
+const S={wave:1.1,queue:4,rail:2,cust:14,pc:false,pri:'h',storm:false},old={};
+const IN=[['wave','Высота волны, м',0,5,.1],['queue','Очередь судов в порту',0,15,1],['rail','Опоздание ж/д состава, ч',0,24,1],['cust','Ожидание на таможне, ч',0,36,1]];
+const LB=['Волнение','Очередь в порту','Таможня','Опоздание поезда','Риск пропустить паром'];
+const W=[1.1,1.4,2.2,3.6,3.1,1.8,1.2],Q=[4,5,7,10,12,9,6],D=['Чт','Пт','Сб','Вс','Пн','Вт','Ср'];
+const R=[
+{n:'Астрахань — Энзели, паром',wk:1,qk:1,c:4200,seg:[['rail',1400,30,[[70,50],[290,100]]],['sea',700,38,[[290,100],[300,290]]],['road',1900,40,[[300,290],[400,380]]]]},
+{n:'Махачкала — Энзели, паром',wk:.8,qk:.6,c:4500,seg:[['rail',1900,40,[[70,50],[280,170]]],['sea',680,36,[[280,170],[300,290]]],['road',1900,40,[[300,290],[400,380]]]]},
+{n:'Махачкала — Амирабад, паром',wk:.9,qk:.5,c:4700,seg:[['rail',1900,40,[[70,50],[280,170]]],['sea',640,34,[[280,170],[390,280]]],['road',1800,38,[[390,280],[400,380]]]]},
+{n:'Восточный ж/д через Казахстан и Туркмению',wk:0,qk:0,c:6100,seg:[['rail',5900,130,[[70,50],[440,70],[520,220],[430,370],[400,380]]]]}];
+const MD={rail:'Ж/д',sea:'Море',road:'Авто'},EF={rail:22,sea:16,road:62},T=22;
+const fmt=h=>h<48?Math.round(h)+' ч':(h/24).toFixed(1)+' сут';
+const eta=h=>new Date(new Date(2026,10,12,18).getTime()+h*36e5).toLocaleString('ru-RU',{day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'});
+
+/* Предиктивная модель: прозрачная логистическая модель + правила.
+   В рабочей версии заменяется на градиентный бустинг по историческим данным. */
+const pred=o=>{
+ const c=o.cust*(o.pc?.15:1);
+ const P=[Math.max(0,o.wave-1.5)**2*6+(o.wave>=3.5?48:0),o.queue*2.2,c,o.rail*.8];
+ const z=-3+.9*o.wave+.12*o.queue+.15*o.rail+.04*c,p=1/(1+Math.exp(-z));
+ P.push(p*24);
+ return{p,P,h:P.reduce((a,b)=>a+b,0)};
+};
+const calc=()=>R.map(r=>{
+ const m=pred({wave:S.wave*r.wk,queue:S.queue*r.qk,rail:S.rail,cust:S.cust,pc:S.pc});
+ const km=r.seg.reduce((a,s)=>a+s[1],0),g=r.seg.reduce((a,s)=>a+s[1]*EF[s[0]],0),I=g/km;
+ return{...r,m,km,h:r.seg.reduce((a,s)=>a+s[2],0)+m.h,co2:g*T/1e6,cost:r.c+Math.round(35*m.h),rate:I<30?'A':I<45?'B':'C'};
+});
+
+function ctl(){
+ $('ctl').innerHTML=IN.map(([k,t,a,b,s])=>`<label>${t}<b id="v${k}"></b><input type="range" id="i${k}" min="${a}" max="${b}" step="${s}"></label>`).join('')+'<button id="st"></button><p id="pst" class="n"></p>';
+ IN.forEach(([k])=>$('i'+k).oninput=e=>{S[k]=+e.target.value;S.storm=false;render()});
+ $('st').onclick=()=>{if(S.storm)Object.assign(S,old);else{old.wave=S.wave;old.queue=S.queue;S.wave=4.6;S.queue=13}S.storm=!S.storm;render()};
+}
+function map(C,rec){
+ let s='<path d="M262 112Q330 100 410 125Q440 200 420 250Q400 300 340 310Q290 300 285 250Q300 200 262 112Z" fill="var(--sea)" opacity=".16"/><text x="330" y="215" font-size="12" fill="var(--mut)" font-style="italic" text-anchor="middle">Каспийское море</text>';
+ C.forEach(r=>{const on=r===rec;r.seg.forEach(g=>s+=`<polyline points="${g[3].join(' ')}" fill="none" stroke="${on?'var(--sea)':'var(--mut)'}" stroke-width="${on?4:1.5}" opacity="${on?1:.45}" ${g[0]=='sea'?'stroke-dasharray="7 5"':''}/>`)});
+ [['Москва',70,50,null],['Астрахань',290,100,C[0].m.p],['Махачкала',280,170,C[1].m.p,1],['Энзели',300,290,C[1].m.p,1],['Амирабад',390,280,C[2].m.p],['Бендер-Аббас',400,380,null]].forEach(([n,x,y,p,l])=>{
+  s+=`<circle cx="${x}" cy="${y}" r="7" fill="${p==null?'var(--ink)':col(p)}" stroke="var(--bg)" stroke-width="2"/><text x="${l?x-11:x+11}" y="${y+4}" font-size="13" fill="currentColor" ${l?'text-anchor="end"':''}>${n}</text>`});
+ $('map').innerHTML=`<svg viewBox="0 0 640 420" role="img" aria-label="Схема маршрутов" style="width:100%;color:var(--ink)">${s}</svg>`;
+}
+function forecast(){
+ const v=D.map((d,i)=>({d,...pred({wave:Math.max(0,W[i]+S.wave-W[0]),queue:Math.max(0,Q[i]+S.queue-Q[0]),rail:S.rail,cust:S.cust,pc:S.pc})}));
+ const mx=Math.max(...v.map(x=>x.h),1),best=v.reduce((a,b)=>b.h<a.h?b:a);
+ $('fc').innerHTML='<svg viewBox="0 0 410 190" role="img" aria-label="Прогноз задержки на 7 дней" style="width:100%;color:var(--ink)">'+v.map((x,i)=>{const h=x.h/mx*120,X=10+i*57;
+  return`<rect x="${X}" y="${150-h}" width="40" height="${h}" fill="${col(x.p)}" ${x===best?'stroke="currentColor" stroke-width="2.5"':''}/><text x="${X+20}" y="${144-h}" text-anchor="middle" font-size="12" fill="currentColor">${Math.round(x.h)}</text><text x="${X+20}" y="172" text-anchor="middle" font-size="13" fill="currentColor">${x.d}</text>`}).join('')+'</svg>';
+ return best;
+}
+function render(){
+ const C=calc(),rec=[...C].sort((a,b)=>a[S.pri]-b[S.pri])[0],alt=[...C].sort((a,b)=>a[S.pri]-b[S.pri])[1];
+ IN.forEach(([k])=>{$('i'+k).value=S[k];$('v'+k).textContent=S[k]});
+ $('st').textContent=S.storm?'Снять шторм':'Смоделировать шторм';$('st').classList.toggle('on',S.storm);
+ $('pst').textContent=S.pc?'Pre-clearance оформлен: таможня занимает 15% обычного времени.':'Pre-clearance не оформлен: таможня идёт в обычном режиме.';
+ map(C,rec);
+ const best=forecast(),a=C[0].m;
+ $('num').innerHTML=`<p style="font-size:44px;line-height:1.1;margin:0">${Math.round(a.p*100)}%</p><p style="margin:0 0 14px">вероятность сорвать стыковку «поезд — паром» через Астрахань: <b style="color:${col(a.p)}">${a.p<.35?'низкая':a.p<.65?'повышенная':'высокая'}</b></p><p style="margin:0 0 6px">Ожидаемая задержка: <b>${fmt(a.h)}</b>. Из чего она складывается:</p>`+LB.map((l,i)=>`<div class="r"><span>${l}</span><b>+${a.P[i].toFixed(1)} ч</b></div>`).join('')+`<p>Лучшее окно отправки: <b>${best.d}</b></p>`;
+ $('pcs').innerHTML=`Время на таможне: <b>${S.cust} ч → ${(S.pc?S.cust*.15:S.cust).toFixed(1)} ч</b>`;
+ document.querySelectorAll('[data-p]').forEach(b=>b.classList.toggle('on',b.dataset.p==S.pri));
+ $('rt').innerHTML='<table><tr><th>Маршрут<th>Прибытие<th>Стоимость<th>CO₂, т<th>ESG</tr>'+C.map(r=>`<tr class="${r===rec?'rec':''}"><td>${r.n}${r===rec?' (рекомендуем)':''}<td>${eta(r.h)}<td>$${r.cost.toLocaleString('ru-RU')}<td>${r.co2.toFixed(1)}<td>${r.rate}</tr>`).join('')+'</table>';
+ const sv=Math.round((1-rec.co2/(rec.km*EF.road*T/1e6))*100);
+ $('tw').innerHTML=`<p style="margin-top:0"><b>Цифровой двойник груза CSC-4821</b><br>Прибытие в Бендер-Аббас: <b>${eta(rec.h)}</b></p>`+rec.seg.map((g,i)=>`<div class="r"><span>${i?'○':'●'} ${MD[g[0]]}, ${g[1]} км</span><b>${i?'ожидает':'в пути'}</b></div>`).join('')+`<p>Углеродный след: <b>${rec.co2.toFixed(1)} т CO₂</b>, на ${sv}% меньше, чем при перевозке этим же путём только на авто. Рейтинг ESG: <b>${rec.rate}</b>.</p><p>Запасной маршрут при форс-мажоре: <b>${alt.n}</b>, прибытие ${eta(alt.h)}.</p><p id="tl" class="n"></p>`;
+ tele();
+}
+const tele=()=>{if($('tl'))$('tl').textContent=`Датчики: ${(19+Math.random()*3).toFixed(1)} °C, вибрация ${(.1+Math.random()*.3).toFixed(2)} g, пломба ${S.pc?'подтверждена в реестре':'не внесена в реестр'}`};
+setInterval(tele,3000);
+
+/* Цифровой коридор: цепочка блоков с хэшами (SHA-256, запасной вариант без crypto.subtle) */
+async function H(t){try{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}catch(e){let h=5381;for(const c of t)h=(h*33^c.charCodeAt(0))>>>0;return h.toString(16).padStart(8,'0').repeat(8)}}
+const ST=[['Декларация подана','Декларант ООО «Демо-Логистик», ТН ВЭД 8429.51, 22 т'],['Документы проверены','Инвойс, CMR, сертификат происхождения: комплект полный, вес совпадает'],['Риск-скоринг','Профиль риска низкий, досмотр не требуется'],['Pre-clearance: Россия','Решение выдано до прибытия в порт'],['Pre-clearance: Иран','Решение выдано, груз идёт по зелёному коридору']];
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let L=[],busy=false;
+const draw=()=>{$('lg').innerHTML=L.map((b,i)=>`<div class="blk ${b.bad?'bad':''}"><b>Блок ${i+1}. ${b.t}</b><br>${b.d}<br><code>хэш ${b.h.slice(0,16)}…, предыдущий ${b.prev.slice(0,8)}…</code></div>`).join('')||'<p class="n">Блоков пока нет. Подайте предварительную декларацию.</p>'};
+$('go').onclick=async()=>{
+ if(busy)return;busy=true;L=[];S.pc=false;$('vm').textContent='';render();draw();
+ for(const[t,d]of ST){await sleep(650);const prev=L.length?L[L.length-1].h:'0'.repeat(64),data=t+'|'+d+'|'+new Date().toISOString();L.push({t,d,data,prev,h:await H(prev+data)});draw()}
+ S.pc=true;busy=false;$('vm').textContent='Все блоки подписаны, pre-clearance оформлен.';render();
+};
+$('tp').onclick=()=>{if(L.length<2||busy)return;L[1].data+='x';L[1].d+=' (изменено)';draw();$('vm').textContent='Блок 2 изменён. Нажмите «Проверить цепочку».'};
+$('vf').onclick=async()=>{
+ if(!L.length||busy)return;let prevH='0'.repeat(64),first=-1;
+ for(let i=0;i<L.length;i++){const h=await H(L[i].prev+L[i].data);L[i].bad=h!==L[i].h||L[i].prev!==prevH;if(L[i].bad&&first<0)first=i+1;prevH=h}
+ draw();$('vm').textContent=first<0?'Цепочка цела: все хэши совпадают.':`Цепочка нарушена, начиная с блока ${first}. Данные подменены, pre-clearance недействителен.`;
+};
+document.querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>{S.pri=b.dataset.p;render()});
+ctl();draw();render();
+</script></body></html>
